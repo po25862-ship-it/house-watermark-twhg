@@ -13,15 +13,19 @@ except AttributeError:
 # 網頁基本設定
 st.set_page_config(page_title="房仲多重浮水印工作站", page_icon="🏠", layout="wide")
 
-# 初始化 Session State (確保跨重整仍保留資料)
+# 初始化 Session State
 if 'watermark_list' not in st.session_state:
     st.session_state.watermark_list = []
 
-# 自動偵測與建立字體資料夾
+# 路徑設定
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(CURRENT_DIR, "Fonts")
-if not os.path.exists(FONTS_DIR):
-    os.makedirs(FONTS_DIR)
+WM_DIR = os.path.join(CURRENT_DIR, "Watermarks")
+
+# 自動建立必要資料夾
+for d in [FONTS_DIR, WM_DIR]:
+    if not os.path.exists(d):
+        os.makedirs(d)
 
 # 輔助函式：產生文字圖片
 def create_text_img(item):
@@ -68,39 +72,71 @@ def create_text_img(item):
             y += (bbox[3] - bbox[1]) + 15
     return txt_img
 
-# ===== 1. 先處理照片上傳 (這是防止消失的關鍵) =====
+# ===== 1. 主照片上傳區 (優先渲染) =====
 st.title("🏠 台灣房屋 - 多重疊加發文工作站")
 uploaded_photos = st.file_uploader("📂 第一步：上傳屋況照片 (支援全選)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
 
 # ===== 2. 側邊欄設定區 =====
-st.sidebar.header("⚙️ 發文設定")
+st.sidebar.header("⚙️ 輸出命名設定")
 rename_prefix = st.sidebar.text_input("照片命名開頭", "台灣房屋_捷運樂善物件")
 
 st.sidebar.write("---")
-st.sidebar.header("🎨 新增設計")
-wm_type = st.sidebar.selectbox("想要新增什麼？", ["專屬文字標籤", "圖片浮水印 (Logo/Q版)"])
+st.sidebar.header("🎨 新增設計物件")
+
+# 新增選項：預設圖庫
+add_mode = st.sidebar.radio("選擇新增方式", ["從常用圖庫選取", "上傳新圖片", "設計文字標籤"])
 
 active_design_obj = None
 
-if wm_type == "圖片浮水印 (Logo/Q版)":
-    uploaded_wm = st.sidebar.file_uploader("上傳 PNG 浮水印檔案", type=['png'], key="uploader_wm")
+if add_mode == "從常用圖庫選取":
+    # 掃描 Watermarks 資料夾
+    preset_files = [f for f in os.listdir(WM_DIR) if f.lower().endswith('.png')]
+    if not preset_files:
+        st.sidebar.warning("圖庫資料夾目前是空的。請將 Logo 檔案放到 GitHub 的 Watermarks 資料夾中。")
+    else:
+        selected_wm_file = st.sidebar.selectbox("選擇預設 Logo/Q版圖", preset_files)
+        if selected_wm_file:
+            img_path = os.path.join(WM_DIR, selected_wm_file)
+            img_obj = Image.open(img_path).convert("RGBA")
+            active_design_obj = {"type": "image", "img": img_obj, "name": selected_wm_file}
+            st.sidebar.image(img_obj, width=150, caption=f"預覽：{selected_wm_file}")
+
+elif add_mode == "上傳新圖片":
+    uploaded_wm = st.sidebar.file_uploader("上傳 PNG 浮水印", type=['png'], key="manual_up")
     if uploaded_wm:
         img_obj = Image.open(uploaded_wm).convert("RGBA")
         active_design_obj = {"type": "image", "img": img_obj, "name": uploaded_wm.name}
-        st.sidebar.image(img_obj, width=150, caption="準備新增的圖片")
+        st.sidebar.image(img_obj, width=150)
+
 else:
-    text_input = st.sidebar.text_area("輸入內容", "帶看專線：0938-888-906\n(專屬顧問：劉昭佑)", key="text_input")
+    # 文字標籤模式：加入「快速範本」功能
+    st.sidebar.subheader("文字內容設計")
     
-    # 字體過濾：只顯示 Fonts 資料夾內的
+    # 昭佑專屬範本
+    template_option = st.sidebar.selectbox("📋 選擇快速範本", [
+        "自定義輸入", 
+        "帶看專線範本", 
+        "店址資訊範本", 
+        "FB廣告精簡版"
+    ])
+    
+    default_text = ""
+    if template_option == "帶看專線範本":
+        default_text = "帶看專線：0938-888-906\n專屬顧問：劉昭佑"
+    elif template_option == "店址資訊範本":
+        default_text = "台灣房屋 捷運樂善直營店\n預約賞屋：0938-888-906"
+    elif template_option == "FB廣告精簡版":
+        default_text = "🏠 精選物件 歡迎預約\n📞 0938-888-906 劉昭佑"
+    
+    text_input = st.sidebar.text_area("編輯文字內容", default_text if template_option != "自定義輸入" else "請輸入文字內容", key="text_input")
+    
     fonts_map = {}
     if os.path.exists(FONTS_DIR):
         for font_file in os.listdir(FONTS_DIR):
             if font_file.lower().endswith(('.ttf', '.ttc', '.otf')):
                 fonts_map[f"{os.path.splitext(font_file)[0]}"] = os.path.join(FONTS_DIR, font_file)
     
-    if not fonts_map:
-        fonts_map["(請先上傳字體檔)"] = "default"
-        
+    if not fonts_map: fonts_map["(請先上傳字體)"] = "default"
     selected_font = st.sidebar.selectbox("選擇字體", list(fonts_map.keys()))
     text_style = st.sidebar.selectbox("底框樣式", ["半透明底框", "實色底框", "無底框+描邊"])
     t_col = st.sidebar.color_picker("文字顏色", "#FFFFFF")
@@ -111,72 +147,58 @@ else:
             "type": "text", "text": text_input, "font": fonts_map[selected_font],
             "style": text_style, "t_color": t_col, "b_color": b_col
         }
-        # 【即時預覽區】
-        st.sidebar.write("樣式預覽：")
         st.sidebar.image(create_text_img(active_design_obj), use_container_width=True)
 
-if st.sidebar.button("➕ 確認並加入清單", type="primary", use_container_width=True):
+if st.sidebar.button("➕ 將此物件加入照片", type="primary", use_container_width=True):
     if active_design_obj:
         active_design_obj["scale"] = 1.0
         active_design_obj["pos_x"] = 95
         active_design_obj["pos_y"] = 95
         st.session_state.watermark_list.append(active_design_obj)
-        st.rerun() # 加入後強制更新畫面
+        st.rerun()
 
 st.sidebar.write("---")
-st.sidebar.header("📝 已加入物件管理")
+st.sidebar.header("📝 已加入物件清單")
 
 if not st.session_state.watermark_list:
-    st.sidebar.write("清單目前是空的")
+    st.sidebar.write("目前清單為空")
 else:
-    # 使用倒序顯示，最新加入的在最上面，方便調整
     for i, item in enumerate(st.session_state.watermark_list):
-        d_name = f"物件 #{i+1} " + (item["name"] if item["type"] == "image" else item["text"].split('\n')[0][:8])
+        d_name = f"#{i+1} " + (item["name"] if item["type"] == "image" else item["text"].split('\n')[0][:10])
         with st.sidebar.expander(d_name, expanded=True):
             item["scale"] = st.slider(f"大小 (10x)", 0.1, 10.0, float(item["scale"]), 0.1, key=f"s_{i}")
-            item["pos_x"] = st.slider(f"左右", 0, 100, int(item["pos_x"]), 1, key=f"x_{i}")
-            item["pos_y"] = st.slider(f"上下", 0, 100, int(item["pos_y"]), 1, key=f"y_{i}")
-            if st.button(f"🗑️ 移除此物件", key=f"del_{i}"):
+            item["pos_x"] = st.slider(f"左右位置", 0, 100, int(item["pos_x"]), 1, key=f"x_{i}")
+            item["pos_y"] = st.slider(f"上下位置", 0, 100, int(item["pos_y"]), 1, key=f"y_{i}")
+            if st.button(f"🗑️ 移除", key=f"del_{i}"):
                 st.session_state.watermark_list.pop(i)
                 st.rerun()
 
-# ===== 3. 主畫面預覽區 (絕對渲染邏輯) =====
+# ===== 3. 主畫面預覽 (絕對渲染) =====
 if uploaded_photos:
     st.subheader("👀 即時預覽 (第一張照片)")
-    
-    # 建立畫布
     base = Image.open(uploaded_photos[0]).convert("RGBA")
     ratio = 800 / base.width
     canvas = base.resize((800, int(base.height * ratio)), RESAMPLE)
     
-    # 只要清單有東西就疊加
     for item in st.session_state.watermark_list:
         source = item["img"] if item["type"] == "image" else create_text_img(item)
         sw = max(1, int(source.width * item["scale"] * ratio))
         sh = max(1, int(source.height * item["scale"] * ratio))
         ready_wm = source.resize((sw, sh), RESAMPLE)
-        
         px = int((canvas.width - sw) * (item["pos_x"] / 100))
         py = int((canvas.height - sh) * (item["pos_y"] / 100))
-        
         overlay = Image.new('RGBA', canvas.size, (0,0,0,0))
         overlay.paste(ready_wm, (px, py), mask=ready_wm)
         canvas = Image.alpha_composite(canvas, overlay)
     
-    # 這裡是最重要的一行：無論清單有沒有東西，這張照片一定要顯示出來
     st.image(canvas.convert("RGB"), use_container_width=True)
 
-    if not st.session_state.watermark_list:
-        st.info("💡 目前顯示原始照片。請從左側設計樣式並點擊「➕ 加入清單」來疊加浮水印。")
-
-    # 批次處理按鈕
-    if st.button("🚀 確認排版！一鍵處理所有照片", type="primary", use_container_width=True):
+    if st.button("🚀 確認排版並產出所有照片", type="primary", use_container_width=True):
         progress = st.progress(0)
         zip_io = io.BytesIO()
         with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
             for idx, photo in enumerate(uploaded_photos):
                 img = Image.open(photo).convert("RGBA")
-                # FB 1920 最佳化
                 if img.width > 1920 or img.height > 1920:
                     r = min(1920/img.width, 1920/img.height)
                     img = img.resize((int(img.width*r), int(img.height*r)), RESAMPLE)
@@ -202,8 +224,7 @@ if uploaded_photos:
                 zf.writestr(name, buf.getvalue())
                 progress.progress((idx + 1) / len(uploaded_photos))
         
-        st.success("🎉 處理完成！")
+        st.success("🎉 批次處理完成！")
         st.download_button("📥 下載 ZIP 壓縮包", zip_io.getvalue(), f"{rename_prefix}.zip", "application/zip", use_container_width=True)
 else:
-    st.write("---")
-    st.info("👋 你好！請先上傳幾張照片，右側就會立刻出現預覽效果囉！")
+    st.info("👋 你好，昭佑！請先上傳屋況照片，然後就能從左側勾選預設 Logo 或套用文字範本囉！")
