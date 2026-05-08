@@ -27,7 +27,7 @@ for d in [FONTS_DIR, WM_DIR]:
     if not os.path.exists(d):
         os.makedirs(d)
 
-# 輔助函式：產生文字圖片
+# 輔助函式：產生文字圖片 (🚀 這裡修正了隱形邊界問題)
 def create_text_img(item):
     try:
         if not item["font"] or item["font"] == "default":
@@ -40,25 +40,34 @@ def create_text_img(item):
     lines = item["text"].split('\n')
     max_w = 0
     total_h = 0
-    for line in lines:
+    line_spacing = 15 # 行距
+    
+    # 第一階段：精準計算文字實際佔用的寬高，去除多餘的底部空白
+    for i, line in enumerate(lines):
         bbox = font.getbbox(line)
         max_w = max(max_w, bbox[2] - bbox[0])
-        total_h += (bbox[3] - bbox[1]) + 15
-    
+        total_h += (bbox[3] - bbox[1])
+        # 只有不是最後一行時，才加上行距
+        if i < len(lines) - 1:
+            total_h += line_spacing
+            
     t_rgb = tuple(int(item["t_color"].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
     b_rgb = tuple(int(item["b_color"].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
     
     if item["style"] == "無底框+描邊":
         sw = 4
-        img_w, img_h = max_w + sw*2 + 20, total_h + sw*2 + 20
+        # 將透明邊界縮減到極限，只保留給描邊用的空間
+        pad = sw + 2 
+        img_w, img_h = max_w + pad*2, total_h + pad*2
         txt_img = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(txt_img)
-        y = 10
-        for line in lines:
+        y = pad
+        for i, line in enumerate(lines):
             bbox = font.getbbox(line)
-            draw.text((10, y - bbox[1]), line, font=font, fill=t_rgb+(255,), stroke_width=sw, stroke_fill=b_rgb+(255,))
-            y += (bbox[3] - bbox[1]) + 15
+            draw.text((pad, y - bbox[1]), line, font=font, fill=t_rgb+(255,), stroke_width=sw, stroke_fill=b_rgb+(255,))
+            y += (bbox[3] - bbox[1]) + line_spacing
     else:
+        # 有底框的版本因為需要色塊背景，保留原本的 Padding
         pad = 35
         img_w, img_h = max_w + pad*2, total_h + pad*2
         txt_img = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
@@ -69,7 +78,8 @@ def create_text_img(item):
         for line in lines:
             bbox = font.getbbox(line)
             draw.text((pad, y - bbox[1]), line, font=font, fill=t_rgb+(255,))
-            y += (bbox[3] - bbox[1]) + 15
+            y += (bbox[3] - bbox[1]) + line_spacing
+            
     return txt_img
 
 # ===== 主畫面：照片上傳區 =====
@@ -176,7 +186,6 @@ else:
 # ===== 主畫面：即時預覽與輸出區 =====
 if uploaded_photos:
     st.subheader("👀 即時預覽 (目前顯示第一張)")
-    # 【關鍵修正】：強制把照片的物理方向轉正 (解決 Windows 預覽與輸出錯位問題)
     raw_preview = Image.open(uploaded_photos[0])
     fixed_preview = ImageOps.exif_transpose(raw_preview)
     base = fixed_preview.convert("RGBA")
@@ -202,12 +211,10 @@ if uploaded_photos:
         zip_io = io.BytesIO()
         with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
             for idx, photo in enumerate(uploaded_photos):
-                # 【關鍵修正】：正式處理時也要強制轉正
                 raw_img = Image.open(photo)
                 fixed_img = ImageOps.exif_transpose(raw_img)
                 img = fixed_img.convert("RGBA")
                 
-                # FB 1920 最佳化
                 if img.width > 1920 or img.height > 1920:
                     r = min(1920/img.width, 1920/img.height)
                     img = img.resize((int(img.width*r), int(img.height*r)), RESAMPLE)
