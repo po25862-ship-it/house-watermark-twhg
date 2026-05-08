@@ -1,10 +1,11 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import io
 import zipfile
 import os
+import time
 
-# 處理縮放相容性
+# 處理舊版與新版 PIL 的縮放濾鏡相容性
 try:
     RESAMPLE = Image.Resampling.LANCZOS
 except AttributeError:
@@ -17,12 +18,11 @@ st.set_page_config(page_title="房仲多重浮水印工作站", page_icon="🏠"
 if 'watermark_list' not in st.session_state:
     st.session_state.watermark_list = []
 
-# 路徑設定
+# 路徑設定與自動建立資料夾
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(CURRENT_DIR, "Fonts")
 WM_DIR = os.path.join(CURRENT_DIR, "Watermarks")
 
-# 自動建立必要資料夾
 for d in [FONTS_DIR, WM_DIR]:
     if not os.path.exists(d):
         os.makedirs(d)
@@ -72,27 +72,25 @@ def create_text_img(item):
             y += (bbox[3] - bbox[1]) + 15
     return txt_img
 
-# ===== 1. 主照片上傳區 (優先渲染) =====
+# ===== 主畫面：照片上傳區 =====
 st.title("🏠 台灣房屋 - 多重疊加發文工作站")
-uploaded_photos = st.file_uploader("📂 第一步：上傳屋況照片 (支援全選)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+uploaded_photos = st.file_uploader("📂 第一步：上傳屋況照片 (更換物件時，直接點 X 刪除舊照片再上傳新的)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
 
-# ===== 2. 側邊欄設定區 =====
+# ===== 側邊欄：設計與控制面板 =====
 st.sidebar.header("⚙️ 輸出命名設定")
-rename_prefix = st.sidebar.text_input("照片命名開頭", "台灣房屋_捷運樂善物件")
+rename_prefix = st.sidebar.text_input("照片批次命名開頭", "台灣房屋_A7捷運樂善物件")
 
 st.sidebar.write("---")
 st.sidebar.header("🎨 新增設計物件")
 
-# 新增選項：預設圖庫
 add_mode = st.sidebar.radio("選擇新增方式", ["從常用圖庫選取", "上傳新圖片", "設計文字標籤"])
 
 active_design_obj = None
 
 if add_mode == "從常用圖庫選取":
-    # 掃描 Watermarks 資料夾
     preset_files = [f for f in os.listdir(WM_DIR) if f.lower().endswith('.png')]
     if not preset_files:
-        st.sidebar.warning("圖庫資料夾目前是空的。請將 Logo 檔案放到 GitHub 的 Watermarks 資料夾中。")
+        st.sidebar.warning("圖庫目前是空的。請切換到「上傳新圖片」並點擊記憶圖庫！")
     else:
         selected_wm_file = st.sidebar.selectbox("選擇預設 Logo/Q版圖", preset_files)
         if selected_wm_file:
@@ -107,17 +105,19 @@ elif add_mode == "上傳新圖片":
         img_obj = Image.open(uploaded_wm).convert("RGBA")
         active_design_obj = {"type": "image", "img": img_obj, "name": uploaded_wm.name}
         st.sidebar.image(img_obj, width=150)
+        
+        if st.sidebar.button("💾 記憶此圖（加入常用圖庫）"):
+            save_path = os.path.join(WM_DIR, uploaded_wm.name)
+            with open(save_path, "wb") as f:
+                f.write(uploaded_wm.getbuffer())
+            st.sidebar.success("✅ 已成功記憶！以後可以直接從圖庫選取。")
+            time.sleep(1)
+            st.rerun()
 
 else:
-    # 文字標籤模式：加入「快速範本」功能
     st.sidebar.subheader("文字內容設計")
-    
-    # 昭佑專屬範本
     template_option = st.sidebar.selectbox("📋 選擇快速範本", [
-        "自定義輸入", 
-        "帶看專線範本", 
-        "店址資訊範本", 
-        "FB廣告精簡版"
+        "自定義輸入", "帶看專線範本", "店址資訊範本", "FB廣告精簡版"
     ])
     
     default_text = ""
@@ -136,7 +136,7 @@ else:
             if font_file.lower().endswith(('.ttf', '.ttc', '.otf')):
                 fonts_map[f"{os.path.splitext(font_file)[0]}"] = os.path.join(FONTS_DIR, font_file)
     
-    if not fonts_map: fonts_map["(請先上傳字體)"] = "default"
+    if not fonts_map: fonts_map["(請先將字體檔放入 Fonts 資料夾)"] = "default"
     selected_font = st.sidebar.selectbox("選擇字體", list(fonts_map.keys()))
     text_style = st.sidebar.selectbox("底框樣式", ["半透明底框", "實色底框", "無底框+描邊"])
     t_col = st.sidebar.color_picker("文字顏色", "#FFFFFF")
@@ -149,7 +149,7 @@ else:
         }
         st.sidebar.image(create_text_img(active_design_obj), use_container_width=True)
 
-if st.sidebar.button("➕ 將此物件加入照片", type="primary", use_container_width=True):
+if st.sidebar.button("➕ 將此物件加入畫面", type="primary", use_container_width=True):
     if active_design_obj:
         active_design_obj["scale"] = 1.0
         active_design_obj["pos_x"] = 95
@@ -158,25 +158,29 @@ if st.sidebar.button("➕ 將此物件加入照片", type="primary", use_contain
         st.rerun()
 
 st.sidebar.write("---")
-st.sidebar.header("📝 已加入物件清單")
+st.sidebar.header("📝 已加入的排版圖層")
 
 if not st.session_state.watermark_list:
-    st.sidebar.write("目前清單為空")
+    st.sidebar.write("目前畫面無任何圖層")
 else:
     for i, item in enumerate(st.session_state.watermark_list):
-        d_name = f"#{i+1} " + (item["name"] if item["type"] == "image" else item["text"].split('\n')[0][:10])
+        d_name = f"圖層 #{i+1} " + (item["name"] if item["type"] == "image" else item["text"].split('\n')[0][:10])
         with st.sidebar.expander(d_name, expanded=True):
-            item["scale"] = st.slider(f"大小 (10x)", 0.1, 10.0, float(item["scale"]), 0.1, key=f"s_{i}")
+            item["scale"] = st.number_input(f"放大倍率 (1.0為原尺寸)", min_value=0.1, max_value=20.0, value=float(item["scale"]), step=0.1, format="%.1f", key=f"s_{i}")
             item["pos_x"] = st.slider(f"左右位置", 0, 100, int(item["pos_x"]), 1, key=f"x_{i}")
             item["pos_y"] = st.slider(f"上下位置", 0, 100, int(item["pos_y"]), 1, key=f"y_{i}")
-            if st.button(f"🗑️ 移除", key=f"del_{i}"):
+            if st.button(f"🗑️ 刪除此圖層", key=f"del_{i}"):
                 st.session_state.watermark_list.pop(i)
                 st.rerun()
 
-# ===== 3. 主畫面預覽 (絕對渲染) =====
+# ===== 主畫面：即時預覽與輸出區 =====
 if uploaded_photos:
-    st.subheader("👀 即時預覽 (第一張照片)")
-    base = Image.open(uploaded_photos[0]).convert("RGBA")
+    st.subheader("👀 即時預覽 (目前顯示第一張)")
+    # 【關鍵修正】：強制把照片的物理方向轉正 (解決 Windows 預覽與輸出錯位問題)
+    raw_preview = Image.open(uploaded_photos[0])
+    fixed_preview = ImageOps.exif_transpose(raw_preview)
+    base = fixed_preview.convert("RGBA")
+    
     ratio = 800 / base.width
     canvas = base.resize((800, int(base.height * ratio)), RESAMPLE)
     
@@ -193,18 +197,23 @@ if uploaded_photos:
     
     st.image(canvas.convert("RGB"), use_container_width=True)
 
-    if st.button("🚀 確認排版並產出所有照片", type="primary", use_container_width=True):
+    if st.button("🚀 確認版型！一鍵產出所有照片 (FB畫質最佳化)", type="primary", use_container_width=True):
         progress = st.progress(0)
         zip_io = io.BytesIO()
         with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zf:
             for idx, photo in enumerate(uploaded_photos):
-                img = Image.open(photo).convert("RGBA")
+                # 【關鍵修正】：正式處理時也要強制轉正
+                raw_img = Image.open(photo)
+                fixed_img = ImageOps.exif_transpose(raw_img)
+                img = fixed_img.convert("RGBA")
+                
+                # FB 1920 最佳化
                 if img.width > 1920 or img.height > 1920:
                     r = min(1920/img.width, 1920/img.height)
                     img = img.resize((int(img.width*r), int(img.height*r)), RESAMPLE)
                 
                 final = img
-                r_ratio = img.width / Image.open(photo).width
+                r_ratio = img.width / fixed_img.width
                 
                 for item in st.session_state.watermark_list:
                     s = item["img"] if item["type"] == "image" else create_text_img(item)
@@ -224,7 +233,7 @@ if uploaded_photos:
                 zf.writestr(name, buf.getvalue())
                 progress.progress((idx + 1) / len(uploaded_photos))
         
-        st.success("🎉 批次處理完成！")
-        st.download_button("📥 下載 ZIP 壓縮包", zip_io.getvalue(), f"{rename_prefix}.zip", "application/zip", use_container_width=True)
+        st.success("🎉 處理完成！請點擊下方按鈕下載打包檔。")
+        st.download_button("📥 下載處理完成的照片包 (ZIP)", zip_io.getvalue(), f"{rename_prefix}.zip", "application/zip", use_container_width=True)
 else:
-    st.info("👋 你好，昭佑！請先上傳屋況照片，然後就能從左側勾選預設 Logo 或套用文字範本囉！")
+    st.info("👋 嗨！請先將要發文的屋況照片拖曳進來，就可以開始排版囉！換新物件時只需刪除舊照片，排好的版型都會自動保留。")
